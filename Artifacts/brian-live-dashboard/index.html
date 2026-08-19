@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<script type="application/json" id="cowork-artifact-meta">
+{
+  "name": "Brian Live Dashboard",
+  "schemaVersion": 1,
+  "description": "Live dashboard pulling Gmail inbox threads (last 30 days) and recent Google Drive files. Refreshes on every open via the header Reload button.",
+  "mcpTools": [
+    "mcp__ab628220-511c-4013-b252-69d5fe4729e6__search_threads",
+    "mcp__659c88b6-8c6c-4b99-94bb-4ed95a395b70__list_recent_files"
+  ],
+  "mcpServerNames": [
+    "Gmail",
+    "Google Drive"
+  ]
+}
+</script>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brian's Dashboard</title>
+<style>
+  :root { color-scheme: light; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f5f6fa;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+
+  header {
+    background: #fff;
+    border-bottom: 1px solid #e8eaf0;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; font-weight: 600; color: #1a1a2e; }
+  header .time { font-size: 13px; color: #6b7280; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 20px 24px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e8eaf0;
+    overflow: hidden;
+  }
+  .card.full { grid-column: 1 / -1; }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #f0f1f5;
+  }
+  .card-header .icon { font-size: 18px; }
+  .card-header h2 { font-size: 14px; font-weight: 600; flex: 1; }
+  .badge {
+    font-size: 11px;
+    font-weight: 600;
+    background: #eef2ff;
+    color: #4f46e5;
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+  .badge.green { background: #dcfce7; color: #16a34a; }
+  .badge.amber { background: #fef3c7; color: #d97706; }
+
+  .loading {
+    padding: 32px 18px;
+    text-align: center;
+    color: #9ca3af;
+    font-size: 13px;
+  }
+  .spinner {
+    display: inline-block;
+    width: 20px; height: 20px;
+    border: 2px solid #e5e7eb;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Gmail threads */
+  .thread-list { list-style: none; }
+  .thread-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 18px;
+    border-bottom: 1px solid #f5f6fa;
+    cursor: default;
+    transition: background 0.12s;
+  }
+  .thread-item:last-child { border-bottom: none; }
+  .thread-item:hover { background: #f9fafb; }
+  .thread-meta { display: flex; align-items: center; gap: 8px; }
+  .thread-sender {
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+  }
+  .thread-date { font-size: 11px; color: #9ca3af; white-space: nowrap; }
+  .thread-subject {
+    font-size: 12px;
+    color: #374151;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .thread-snippet {
+    font-size: 11px;
+    color: #9ca3af;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .unread .thread-sender { color: #4f46e5; }
+  .unread .thread-subject { font-weight: 600; color: #111827; }
+
+  /* Drive files */
+  .file-list { list-style: none; }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 18px;
+    border-bottom: 1px solid #f5f6fa;
+    transition: background 0.12s;
+  }
+  .file-item:last-child { border-bottom: none; }
+  .file-item:hover { background: #f9fafb; }
+  .file-icon { font-size: 20px; flex-shrink: 0; }
+  .file-info { flex: 1; overflow: hidden; }
+  .file-name {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #111827;
+    text-decoration: none;
+  }
+  .file-name:hover { color: #4f46e5; text-decoration: underline; }
+  .file-meta { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+
+  /* Stat cards */
+  .stats { display: flex; gap: 12px; padding: 14px 18px 0; }
+  .stat { flex: 1; text-align: center; }
+  .stat-value { font-size: 28px; font-weight: 700; color: #4f46e5; }
+  .stat-label { font-size: 11px; color: #6b7280; margin-top: 2px; }
+
+  .error-msg { padding: 20px 18px; color: #dc2626; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📊 Brian's Dashboard</h1>
+  <span class="time" id="ts"></span>
+</header>
+
+<div class="grid">
+
+  <!-- Gmail Stats + Threads -->
+  <div class="card">
+    <div class="card-header">
+      <span class="icon">✉️</span>
+      <h2>Gmail Inbox</h2>
+      <span class="badge" id="gmail-badge">—</span>
+    </div>
+    <div id="gmail-content"><div class="loading"><div class="spinner"></div><br>Loading inbox…</div></div>
+  </div>
+
+  <!-- Drive Recent Files -->
+  <div class="card">
+    <div class="card-header">
+      <span class="icon">📁</span>
+      <h2>Recent Drive Files</h2>
+      <span class="badge green" id="drive-badge">—</span>
+    </div>
+    <div id="drive-content"><div class="loading"><div class="spinner"></div><br>Loading files…</div></div>
+  </div>
+
+</div>
+
+<script>
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function relativeDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 7 * 86400) return Math.floor(diff / 86400) + 'd ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function mimeIcon(mime) {
+  if (!mime) return '📄';
+  if (mime.includes('folder')) return '📂';
+  if (mime.includes('document') || mime.includes('word')) return '📝';
+  if (mime.includes('spreadsheet') || mime.includes('excel')) return '📊';
+  if (mime.includes('presentation') || mime.includes('powerpoint')) return '📽️';
+  if (mime.includes('pdf')) return '📕';
+  if (mime.includes('image')) return '🖼️';
+  if (mime.includes('audio')) return '🎵';
+  if (mime.includes('video')) return '🎬';
+  return '📄';
+}
+
+function senderName(email) {
+  if (!email) return 'Unknown';
+  // strip domain
+  const m = email.match(/^([^@]+)/);
+  return m ? m[1].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : email;
+}
+
+// strip the noreply pattern from sender display
+function displaySender(sender) {
+  if (!sender) return 'Unknown';
+  if (sender.includes('noreply')) return 'Google Drive';
+  const m = sender.match(/<([^>]+)>/);
+  return senderName(m ? m[1] : sender);
+}
+
+// ─── timestamp ───────────────────────────────────────────────────────────────
+
+function updateTimestamp() {
+  document.getElementById('ts').textContent =
+    'Last updated: ' + new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+// ─── Gmail ───────────────────────────────────────────────────────────────────
+
+async function loadGmail() {
+  const el = document.getElementById('gmail-content');
+  const badge = document.getElementById('gmail-badge');
+  try {
+    const r = await window.cowork.callMcpTool(
+      'mcp__ab628220-511c-4013-b252-69d5fe4729e6__search_threads',
+      { query: 'in:inbox newer_than:30d', pageSize: 12 }
+    );
+    const data = r.structuredContent ?? JSON.parse(r.content[0].text);
+    const threads = data.threads || [];
+
+    badge.textContent = threads.length + ' threads';
+
+    if (!threads.length) {
+      el.innerHTML = '<div class="loading">Inbox is empty 🎉</div>';
+      return;
+    }
+
+    // count unread
+    const unreadCount = threads.filter(t =>
+      t.messages && t.messages.some(m => m.labelIds && m.labelIds.includes('UNREAD'))
+    ).length;
+
+    let html = '<ul class="thread-list">';
+    threads.forEach(t => {
+      // pick the most recent message
+      const msgs = t.messages || [];
+      const last = msgs[msgs.length - 1] || {};
+      const isUnread = msgs.some(m => m.labelIds && m.labelIds.includes('UNREAD'));
+      const sender = displaySender(last.sender || '');
+      const subject = last.subject || '(no subject)';
+      const snippet = last.snippet || '';
+      const date = last.date ? relativeDate(last.date) : '';
+
+      html += `<li class="thread-item${isUnread ? ' unread' : ''}">
+        <div class="thread-meta">
+          <span class="thread-sender" title="${last.sender || ''}">${sender}</span>
+          <span class="thread-date">${date}</span>
+        </div>
+        <div class="thread-subject">${escHtml(subject)}</div>
+        <div class="thread-snippet">${escHtml(snippet)}</div>
+      </li>`;
+    });
+    html += '</ul>';
+    el.innerHTML = html;
+
+    if (unreadCount > 0) {
+      badge.textContent = unreadCount + ' unread';
+      badge.className = 'badge amber';
+    } else {
+      badge.textContent = threads.length + ' threads';
+      badge.className = 'badge green';
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="error-msg">⚠️ Could not load Gmail: ${e.message}</div>`;
+    badge.textContent = 'error';
+  }
+}
+
+// ─── Drive ───────────────────────────────────────────────────────────────────
+
+async function loadDrive() {
+  const el = document.getElementById('drive-content');
+  const badge = document.getElementById('drive-badge');
+  try {
+    const r = await window.cowork.callMcpTool(
+      'mcp__659c88b6-8c6c-4b99-94bb-4ed95a395b70__list_recent_files',
+      { pageSize: 12, excludeContentSnippets: true }
+    );
+    const data = r.structuredContent ?? JSON.parse(r.content[0].text);
+    const files = data.files || [];
+
+    badge.textContent = files.length + ' recent';
+
+    if (!files.length) {
+      el.innerHTML = '<div class="loading">No recent files found.</div>';
+      return;
+    }
+
+    let html = '<ul class="file-list">';
+    files.forEach(f => {
+      const icon = mimeIcon(f.mimeType);
+      const name = f.title || 'Untitled';
+      const modified = f.modifiedTime ? relativeDate(f.modifiedTime) : '';
+      const owner = f.owner ? (f.owner === 'matembabrian80@gmail.com' ? 'me' : f.owner.split('@')[0]) : '';
+      const ownerStr = owner ? `· ${owner}` : '';
+      const url = f.viewUrl || '#';
+
+      html += `<li class="file-item">
+        <span class="file-icon">${icon}</span>
+        <div class="file-info">
+          <a class="file-name" href="${url}" target="_blank" title="${escHtml(name)}">${escHtml(name)}</a>
+          <div class="file-meta">${modified} ${ownerStr}</div>
+        </div>
+      </li>`;
+    });
+    html += '</ul>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<div class="error-msg">⚠️ Could not load Drive: ${e.message}</div>`;
+    badge.textContent = 'error';
+  }
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ─── init ────────────────────────────────────────────────────────────────────
+
+async function refresh() {
+  updateTimestamp();
+  await Promise.all([loadGmail(), loadDrive()]);
+}
+
+refresh();
+</script>
+</body>
+</html>

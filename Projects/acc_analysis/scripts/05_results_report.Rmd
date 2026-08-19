@@ -1,0 +1,564 @@
+---
+title: "Results: HIV Service Satisfaction Survey"
+subtitle: "Dodoma Region, Tanzania — ACC Community Level Monitoring"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      ft.align = "left")
+
+library(readxl); library(dplyr); library(tidyr); library(stringr)
+library(purrr);  library(flextable); library(officer)
+
+# ── File paths ────────────────────────────────────────────────────────────────
+FT_FILE  <- "/Users/matemba/Documents/Claude/Projects/acc_analysis/frequency_tables.xlsx"
+MN_FILE  <- "/Users/matemba/Documents/Claude/Projects/acc_analysis/maoni_rubric.xlsx"
+
+# ── Colour constants ──────────────────────────────────────────────────────────
+C_GOOD <- "#d4edda"   # ≥ 75% satisfied
+C_WARN <- "#fff3cd"   # 50–74%
+C_BAD  <- "#f8d7da"   # < 50%
+C_HEAD <- "#1a3a5c"   # header background
+C_MALE <- "#cce5ff"   # male column header
+C_FEM  <- "#f9dff9"   # female column header
+
+sat_colour <- function(p) {
+  if (is.na(p)) return("white")
+  if (p >= 75) C_GOOD else if (p >= 50) C_WARN else C_BAD
+}
+
+# ── Sheet order (used for grouped presentation) ───────────────────────────────
+GROUP_SHEETS <- c(
+  "Adolescents_Youth", "Caregivers_CLHIV", "CHWs", "FGD_Community",
+  "HIV_Community",     "Key_Informants",   "Community_Elders", "PBFW",
+  "Religious_Leaders", "Traditional_Birth_Attendants", "Teachers",
+  "Healthcare_Providers"
+)
+
+# ── Parse a single group sheet ────────────────────────────────────────────────
+parse_group_sheet <- function(sheet) {
+  raw <- suppressMessages(
+    read_excel(FT_FILE, sheet = sheet, col_names = FALSE,
+               .name_repair = "minimal") %>%
+      mutate(across(everything(), as.character))
+  )
+  nrows <- nrow(raw)
+
+  # Helper: index of first row where column 1 matches a pattern
+  find_row <- function(pat) {
+    which(str_detect(as.character(raw[[1]]), regex(pat, ignore_case = TRUE)))[1]
+  }
+
+  title_row <- 1
+  s1_row    <- find_row("SECTION 1")
+  s2_row    <- find_row("SECTION 2")
+  s3_row    <- find_row("SECTION 3")
+
+  # ── Title and N ──────────────────────────────────────────────────────────────
+  title   <- str_squish(as.character(raw[title_row, 1]))
+  n_total <- as.integer(str_extract(title, "(?<=N\\s=\\s)\\d+"))
+  display <- str_trim(str_remove(title, "\\s*\\(N\\s*=\\s*\\d+\\)"))
+
+  # ── Section 1: binary satisfaction ──────────────────────────────────────────
+  s1_data <- NULL
+  if (!is.na(s1_row)) {
+    hdr_row   <- s1_row + 1
+    data_start <- s1_row + 2
+    data_end  <- min(c(s2_row, s3_row, nrows + 1), na.rm = TRUE) - 1
+    if (data_start <= data_end) {
+      hdrs    <- as.character(unlist(raw[hdr_row, 1:6]))
+      s1_data <- raw[data_start:data_end, 1:6] %>%
+        setNames(hdrs) %>%
+        filter(!is.na(.[[1]]) & nchar(trimws(.[[1]])) > 0)
+      s1_data <- s1_data %>%
+        mutate(
+          N            = as.integer(N),
+          N_Satisfied  = as.integer(N_Satisfied),
+          Pct_Sat_num  = as.numeric(str_remove(Pct_Satisfied, "%")),
+          N_NotSat     = as.integer(N_NotSatisfied),
+          Pct_NotSat   = as.numeric(str_remove(Pct_NotSatisfied, "%"))
+        )
+    }
+  }
+
+  # ── Section 2: sex-stratified ────────────────────────────────────────────────
+  s2_data <- NULL; nm <- NA_integer_; nf <- NA_integer_
+  if (!is.na(s2_row)) {
+    s2_hdr_str <- as.character(raw[s2_row, 1])
+    if (!str_detect(s2_hdr_str, regex("not applicable|all.female", ignore_case = TRUE))) {
+      nm_match <- str_extract(s2_hdr_str, "Male\\s+n\\s*=\\s*(\\d+)")
+      nf_match <- str_extract(s2_hdr_str, "Female\\s+n\\s*=\\s*(\\d+)")
+      nm <- as.integer(str_extract(nm_match, "\\d+$"))
+      nf <- as.integer(str_extract(nf_match, "\\d+$"))
+      hdr_row    <- s2_row + 1
+      data_start <- s2_row + 2
+      data_end   <- min(c(s3_row, nrows + 1), na.rm = TRUE) - 1
+      if (!is.na(hdr_row) && data_start <= data_end) {
+        n_s2_cols <- sum(!is.na(as.character(unlist(raw[hdr_row, ]))) &
+                           nchar(trimws(as.character(unlist(raw[hdr_row, ])))) > 0)
+        hdrs <- as.character(unlist(raw[hdr_row, 1:n_s2_cols]))
+        s2_data <- raw[data_start:data_end, 1:n_s2_cols] %>%
+          setNames(hdrs) %>%
+          filter(!is.na(.[[1]]) & nchar(trimws(.[[1]])) > 0)
+        s2_data <- s2_data %>%
+          mutate(
+            Male_N       = as.integer(Male_N),
+            Male_Pct     = as.numeric(Male_Pct_Sat),
+            Female_N     = as.integer(Female_N),
+            Female_Pct   = as.numeric(Female_Pct_Sat),
+            Diff         = as.numeric(Diff_Pct_Sat)
+          )
+      }
+    }
+  }
+
+  list(sheet = sheet, display = display, n_total = n_total,
+       s1 = s1_data, s2 = s2_data, nm = nm, nf = nf)
+}
+
+# ── Load all groups ───────────────────────────────────────────────────────────
+groups <- map(GROUP_SHEETS, ~ tryCatch(parse_group_sheet(.x), error = function(e) NULL)) %>%
+  set_names(GROUP_SHEETS)
+
+# ── Load overview ─────────────────────────────────────────────────────────────
+overview_raw <- suppressMessages(
+  read_excel(FT_FILE, sheet = "Overview", skip = 1, col_names = TRUE,
+             .name_repair = "unique") %>%
+    filter(!is.na(Group)) %>%
+    mutate(
+      N              = as.integer(N_respondents),
+      N_items        = as.integer(N_rating_items),
+      Mean_score     = as.numeric(Mean_score_1to5),
+      Pct_sat        = as.numeric(str_remove(Pct_Satisfied_collapsed, "%")),
+      Sex_strat      = Sex_stratified
+    )
+)
+
+# ── Load maoni theme summary ───────────────────────────────────────────────────
+maoni_theme <- suppressMessages(
+  read_excel(MN_FILE, sheet = "Theme_by_Satisfaction", skip = 1,
+             col_names = TRUE, .name_repair = "unique") %>%
+    filter(!is.na(Theme) & !str_detect(Theme, "Per-Group|Group")) %>%
+    mutate(
+      Total          = as.integer(Total_responses),
+      Pct_pos        = as.numeric(Pct_Positive_sentiment),
+      Pct_neg        = as.numeric(Pct_Negative_Mixed),
+      N_satisfied    = as.integer(From_Satisfied_PCA),
+      N_notsatisfied = as.integer(From_NotSatisfied_PCA),
+      Pct_from_sat   = as.numeric(Pct_from_Satisfied)
+    )
+)
+
+# Per-group theme breakdown (rows below "Per-Group Theme Breakdown...")
+maoni_bygroup <- suppressMessages(
+  read_excel(MN_FILE, sheet = "Theme_by_Satisfaction",
+             col_names = FALSE, .name_repair = "minimal") %>%
+    mutate(across(everything(), as.character))
+) %>% {
+  hdr_idx <- which(str_detect(as.character(.[[1]]), "Per-Group"))[1]
+  if (!is.na(hdr_idx)) {
+    hdr  <- as.character(unlist(.[hdr_idx + 1, ]))
+    dat  <- .[(hdr_idx + 2):nrow(.), 1:length(hdr)] %>% setNames(hdr)
+    dat %>% filter(!is.na(.[[1]]) & nchar(trimws(.[[1]])) > 0) %>%
+      mutate(
+        Neutral  = as.integer(Neutral),
+        Negative = as.integer(Negative),
+        Positive = as.integer(Positive),
+        Mixed    = as.integer(Mixed),
+        Total    = as.integer(Total)
+      )
+  } else {
+    NULL
+  }
+}
+
+# ── flextable: binary satisfaction ───────────────────────────────────────────
+ft_binary <- function(df, cap) {
+  d <- df %>%
+    transmute(
+      Question             = str_trunc(Question, 78),
+      N                    = N,
+      `Satisfied n (%)`    = paste0(N_Satisfied, " (", Pct_Satisfied, ")"),
+      `Not Satisfied n (%)` = paste0(N_NotSatisfied, " (", Pct_NotSatisfied, ")"),
+      pct                  = Pct_Sat_num
+    )
+  disp <- d %>% select(-pct)
+
+  ft <- flextable(disp) %>%
+    set_caption(cap) %>%
+    theme_vanilla() %>%
+    bold(part = "header") %>%
+    bg(bg = C_HEAD, part = "header") %>%
+    color(color = "white", part = "header") %>%
+    align(align = "left",   j = 1, part = "all") %>%
+    align(align = "center", j = 2:4, part = "all") %>%
+    width(j = 1, width = 4.1) %>%
+    width(j = 2, width = 0.45) %>%
+    width(j = 3:4, width = 1.3) %>%
+    fontsize(size = 9, part = "all") %>%
+    set_table_properties(layout = "fixed") %>%
+    border_inner_h(border = fp_border(color = "#dee2e6", width = 0.5))
+
+  for (i in seq_len(nrow(d))) {
+    p <- d$pct[i]
+    if (!is.na(p))
+      ft <- bg(ft, i = i, j = 3,
+               bg = if (p >= 75) C_GOOD else if (p >= 50) C_WARN else C_BAD)
+  }
+  ft
+}
+
+# ── flextable: sex-stratified ─────────────────────────────────────────────────
+ft_strat <- function(df, nm, nf, cap) {
+  d <- df %>%
+    transmute(
+      Question              = str_trunc(Question, 70),
+      `Male N`              = Male_N,
+      `Male Sat. (%)`       = paste0(round(Male_Pct, 1), "%"),
+      `Female N`            = Female_N,
+      `Female Sat. (%)`     = paste0(round(Female_Pct, 1), "%"),
+      `Diff (M−F pp)`       = paste0(ifelse(Diff >= 0, "+", ""),
+                                     round(Diff, 1), "pp"),
+      mp = Male_Pct, fp = Female_Pct, diff = Diff
+    )
+  disp <- d %>% select(-mp, -fp, -diff)
+
+  ft <- flextable(disp) %>%
+    set_caption(cap) %>%
+    add_header_row(
+      values    = c("", paste0("Male (n = ", nm, ")"),
+                    paste0("Female (n = ", nf, ")"), ""),
+      colwidths = c(1, 2, 2, 1)
+    ) %>%
+    theme_vanilla() %>%
+    bold(part = "header") %>%
+    bg(bg = C_HEAD, part = "header", i = 2) %>%
+    bg(bg = C_MALE, part = "header", i = 1, j = 2:3) %>%
+    bg(bg = C_FEM,  part = "header", i = 1, j = 4:5) %>%
+    color(color = "white", part = "header", i = 2) %>%
+    align(align = "left",   j = 1, part = "all") %>%
+    align(align = "center", j = 2:6, part = "all") %>%
+    width(j = 1, width = 3.0) %>%
+    width(j = 2, width = 0.5) %>%
+    width(j = 3, width = 1.0) %>%
+    width(j = 4, width = 0.5) %>%
+    width(j = 5, width = 1.0) %>%
+    width(j = 6, width = 0.9) %>%
+    fontsize(size = 9, part = "all") %>%
+    set_table_properties(layout = "fixed") %>%
+    border_inner_h(border = fp_border(color = "#dee2e6", width = 0.5))
+
+  for (i in seq_len(nrow(d))) {
+    if (!is.na(d$mp[i]))
+      ft <- bg(ft, i = i, j = 3,
+               bg = if (d$mp[i] >= 75) C_GOOD else if (d$mp[i] >= 50) C_WARN else C_BAD)
+    if (!is.na(d$fp[i]))
+      ft <- bg(ft, i = i, j = 5,
+               bg = if (d$fp[i] >= 75) C_GOOD else if (d$fp[i] >= 50) C_WARN else C_BAD)
+    if (!is.na(d$diff[i]) && abs(d$diff[i]) > 15)
+      ft <- bold(ft, i = i, j = 6)
+  }
+  ft
+}
+
+# ── Helper: maoni context paragraph for a group ────────────────────────────────
+maoni_para <- function(group_display) {
+  if (is.null(maoni_bygroup)) return(invisible(NULL))
+  grp_dat <- maoni_bygroup %>%
+    filter(Group == group_display | str_detect(Group, fixed(group_display, ignore_case = TRUE)))
+  if (nrow(grp_dat) == 0) return(invisible(NULL))
+
+  total_resp <- sum(grp_dat$Total, na.rm = TRUE)
+  total_pos  <- sum(grp_dat$Positive, na.rm = TRUE)
+  total_neg  <- sum(grp_dat$Negative + grp_dat$Mixed, na.rm = TRUE)
+  pct_p      <- round(total_pos / total_resp * 100)
+  pct_n      <- round(total_neg / total_resp * 100)
+
+  top_themes <- grp_dat %>%
+    arrange(desc(Total)) %>%
+    slice_head(n = 3) %>%
+    pull(Theme) %>%
+    str_remove("^[A-H]\\s*–\\s*")
+
+  tone <- if (pct_p >= 55) "predominantly positive" else
+          if (pct_n >= 55) "predominantly critical" else "mixed"
+
+  cat(paste0(
+    "\n\n**Written responses (participant opinion):** ",
+    "Written comments from this group (", total_resp, " responses) were ",
+    tone, " in tone, with ", pct_p, "% of responses expressing appreciation ",
+    "and ", pct_n, "% raising challenges or concerns. ",
+    if (length(top_themes) > 0)
+      paste0("The most frequently discussed themes were ",
+             paste0("*", top_themes, "*", collapse = ", "), ". "),
+    "\n\n"
+  ))
+}
+
+# ── Derived cross-group stats ──────────────────────────────────────────────────
+total_n      <- sum(overview_raw$N, na.rm = TRUE)
+mean_sat_all <- round(mean(overview_raw$Pct_sat, na.rm = TRUE), 1)
+n_high       <- sum(overview_raw$Pct_sat >= 75,             na.rm = TRUE)
+n_mid        <- sum(overview_raw$Pct_sat >= 50 & overview_raw$Pct_sat < 75, na.rm = TRUE)
+n_low        <- sum(overview_raw$Pct_sat < 50,              na.rm = TRUE)
+best_grp     <- overview_raw %>% slice_max(Pct_sat, n = 1) %>% pull(Group)
+worst_grp    <- overview_raw %>% slice_min(Pct_sat, n = 1) %>% pull(Group)
+best_pct     <- overview_raw %>% slice_max(Pct_sat, n = 1) %>% pull(Pct_sat)
+worst_pct    <- overview_raw %>% slice_min(Pct_sat, n = 1) %>% pull(Pct_sat)
+```
+
+\newpage
+
+# Results
+
+## Study Participants
+
+A total of **`r total_n`** individuals participated in the survey across 12 respondent categories, following the exclusion of data collected on 18 May 2026 which was identified as non-viable prior to analysis. Respondents spanned the full spectrum of actors involved in HIV service delivery and uptake in the Dodoma Region: direct service users (pregnant and breastfeeding women [PBFW, *n* = 72], persons living with HIV from the general community [*n* = 69], adolescents and youth [*n* = 32], and caregivers of HIV-positive children [*n* = 53]); community-based actors (Community Health Workers [CHWs, *n* = 6], community elders [*n* = 2], religious leaders [*n* = 3], traditional birth attendants [*n* = 4], and teachers [*n* = 4]); community group participants assessed through focus group discussions (FGD, *n* = 19); key informants (*n* = 23); and healthcare providers (*n* = 24). Five groups (CHWs, community elders, religious leaders, traditional birth attendants, and teachers) had fewer than ten respondents; findings from these groups are presented for completeness but should be interpreted as indicative rather than representative. Table 1 presents the composition of each group and their overall satisfaction level.
+
+```{r table1-participants}
+tbl1 <- overview_raw %>%
+  transmute(
+    `Respondent Group`    = Group,
+    N                     = N,
+    `Rating items`        = N_items,
+    `Mean score (1–5)`    = Mean_score,
+    `Overall % Satisfied` = paste0(Pct_sat, "%"),
+    `Sex stratified`      = Sex_strat,
+    pct                   = Pct_sat
+  )
+
+ft <- flextable(tbl1 %>% select(-pct)) %>%
+  set_caption("Table 1. Study participants and overall satisfaction by respondent group") %>%
+  theme_vanilla() %>%
+  bold(part = "header") %>%
+  bg(bg = C_HEAD, part = "header") %>%
+  color(color = "white", part = "header") %>%
+  align(align = "center", j = 2:6, part = "all") %>%
+  align(align = "left",   j = 1,   part = "all") %>%
+  width(j = 1, width = 2.7) %>%
+  width(j = 2:4, width = 0.75) %>%
+  width(j = 5, width = 1.2) %>%
+  width(j = 6, width = 1.0) %>%
+  fontsize(size = 9, part = "all") %>%
+  set_table_properties(layout = "fixed")
+
+for (i in seq_len(nrow(tbl1))) {
+  p <- tbl1$pct[i]
+  if (!is.na(p))
+    ft <- bg(ft, i = i, j = 5,
+             bg = if (p >= 75) C_GOOD else if (p >= 50) C_WARN else C_BAD)
+}
+ft
+```
+
+*Note: Shading in the "Overall % Satisfied" column — green ≥ 75%, amber 50–74%, red < 50%. "Rating items" refers to the number of Likert-scale questions answered by each group. Sex stratification was conducted for groups with ≥ 5 respondents of each sex. Groups with n < 10 are indicative only.*
+
+---
+
+## Overall Satisfaction with HIV Services
+
+Overall, `r mean_sat_all`% of respondents across all 12 groups reported satisfaction with HIV services in the Dodoma Region (mean response rated 3 or above on the 5-point scale). Of the 12 groups assessed, `r n_high` recorded high satisfaction (≥ 75%), `r n_mid` moderate satisfaction (50–74%), and `r n_low` below 50%. The highest satisfaction was recorded among `r best_grp` (`r best_pct`%), while the lowest was observed in `r worst_grp` (`r worst_pct`%). Despite variation across groups, the preponderance of satisfaction ratings above the midpoint indicates broadly positive perceptions of HIV service delivery across respondent categories. Table 2 presents a ranked cross-group comparison.
+
+```{r table2-crossgroup}
+tbl2 <- overview_raw %>%
+  arrange(desc(Pct_sat)) %>%
+  transmute(
+    `Respondent Group`      = Group,
+    N                       = N,
+    `Overall % Satisfied`   = paste0(Pct_sat, "%"),
+    `Mean Score`            = Mean_score,
+    `Highest-rated area`    = str_trunc(Top_3_highest_rated, 55),
+    `Lowest-rated area`     = str_trunc(Top_3_lowest_rated, 55),
+    pct = Pct_sat
+  )
+
+ft2 <- flextable(tbl2 %>% select(-pct)) %>%
+  set_caption("Table 2. Cross-group comparison of satisfaction with HIV services, ranked by overall percentage satisfied") %>%
+  theme_vanilla() %>%
+  bold(part = "header") %>%
+  bg(bg = C_HEAD, part = "header") %>%
+  color(color = "white", part = "header") %>%
+  align(align = "center", j = 2:4, part = "all") %>%
+  align(align = "left",   j = c(1, 5, 6), part = "all") %>%
+  width(j = 1, width = 2.2) %>%
+  width(j = 2, width = 0.45) %>%
+  width(j = 3, width = 1.0) %>%
+  width(j = 4, width = 0.75) %>%
+  width(j = 5:6, width = 1.7) %>%
+  fontsize(size = 9, part = "all") %>%
+  set_table_properties(layout = "fixed")
+
+for (i in seq_len(nrow(tbl2))) {
+  p <- tbl2$pct[i]
+  if (!is.na(p))
+    ft2 <- bg(ft2, i = i, j = 3,
+              bg = if (p >= 75) C_GOOD else if (p >= 50) C_WARN else C_BAD)
+}
+ft2
+```
+
+*Highest- and lowest-rated areas shown are the top entry from each group's ranked item list. For groups with multiple respondent sub-categories (e.g., healthcare providers), item wording reflects the specific sub-instrument used.*
+
+---
+
+## Satisfaction by Respondent Group
+
+The following sub-sections present item-level satisfaction findings for each respondent group. For each group, a binary satisfaction table is presented showing the percentage of respondents satisfied (rated 3–5) and not satisfied (rated 1–2) for each service area, sorted from highest to lowest satisfaction. For three groups with sufficient sample sizes across both sexes — Adolescents & Youth, Caregivers of HIV-Positive Children, and Healthcare Providers — a sex-stratified table follows, showing satisfaction rates for male and female respondents separately. Differences greater than 15 percentage points between sexes are highlighted in bold. All tables use the same colour convention: **green** ≥ 75% satisfied, **amber** 50–74%, **red** < 50%.
+
+```{r per-group-sections, results='asis'}
+for (lbl in GROUP_SHEETS) {
+  g <- groups[[lbl]]
+  if (is.null(g) || is.null(g$s1)) next
+
+  s1       <- g$s1
+  n        <- g$n_total
+  disp     <- g$display
+  small    <- !is.na(n) && n < 10
+  has_strat <- !is.null(g$s2) && !is.na(g$nm) && !is.na(g$nf)
+
+  # ── Derived stats ───────────────────────────────────────────────────────────
+  ov_pct  <- round(mean(s1$Pct_Sat_num, na.rm = TRUE), 1)
+  top_item <- s1 %>% slice_max(Pct_Sat_num, n = 1, with_ties = FALSE) %>%
+    pull(Question) %>% str_trunc(70)
+  bot_item <- s1 %>% slice_min(Pct_Sat_num, n = 1, with_ties = FALSE) %>%
+    pull(Question) %>% str_trunc(70)
+  top_pct  <- s1 %>% slice_max(Pct_Sat_num, n = 1, with_ties = FALSE) %>%
+    pull(Pct_Sat_num)
+  bot_pct  <- s1 %>% slice_min(Pct_Sat_num, n = 1, with_ties = FALSE) %>%
+    pull(Pct_Sat_num)
+
+  sat_level <- if (!is.na(ov_pct)) {
+    if (ov_pct >= 80) "high" else if (ov_pct >= 65) "moderate to high" else
+    if (ov_pct >= 50) "moderate" else "low"
+  } else "indeterminate"
+
+  mean_sc <- overview_raw %>% filter(Group == disp) %>% pull(Mean_score)
+  if (length(mean_sc) == 0) mean_sc <- NA_real_
+
+  # ── Section heading ─────────────────────────────────────────────────────────
+  cat(sprintf("\n\n### %s\n\n", disp))
+
+  if (small) {
+    cat(paste0("*Note: This group has a small sample (n = ", n, "). ",
+               "Findings should be interpreted as indicative only.*\n\n"))
+  }
+
+  # ── Narrative paragraph ──────────────────────────────────────────────────────
+  strat_note <- if (has_strat) {
+    nm <- g$nm; nf <- g$nf
+    # Find largest gap in stratified data
+    max_diff_row <- g$s2 %>% slice_max(abs(Diff), n = 1, with_ties = FALSE)
+    gap_item <- max_diff_row %>% pull(Question) %>% str_trunc(60)
+    gap_val  <- max_diff_row %>% pull(Diff)
+    gap_dir  <- if (gap_val > 0) "higher among male respondents" else "higher among female respondents"
+    paste0(
+      " Of the ", nm + nf, " respondents, ", nm, " were male and ", nf,
+      " were female. Sex-stratified analysis (Table below) shows satisfaction rates ",
+      "were broadly similar between sexes; the largest observed gap was for *",
+      gap_item, "* (", abs(round(gap_val, 1)), " percentage points ", gap_dir, ")."
+    )
+  } else ""
+
+  n_items_grp <- nrow(s1)
+  n_all_sat   <- sum(s1$Pct_Sat_num >= 75, na.rm = TRUE)
+  n_low_sat   <- sum(s1$Pct_Sat_num < 50,  na.rm = TRUE)
+
+  cat(paste0(
+    "Among the **", n, "** ", tolower(disp), " surveyed, overall satisfaction ",
+    "with HIV services was **", sat_level, "**. Across the ", n_items_grp,
+    " rated service areas, the mean item score was **", round(mean_sc, 2),
+    "** out of 5.0, and **", ov_pct, "%** of individual item responses were rated ",
+    "as satisfied (Table below). ",
+    n_all_sat, " of ", n_items_grp, " service areas achieved ≥ 75% satisfaction. ",
+    if (n_low_sat > 0) paste0(n_low_sat,
+      " area(s) fell below 50%, indicating areas requiring attention. ") else
+      "No service area fell below the 50% satisfaction threshold. ",
+    "The highest-rated area was *", top_item, "* (", top_pct, "% satisfied), while ",
+    "the lowest-rated was *", bot_item, "* (", bot_pct, "% satisfied).",
+    strat_note, "\n\n"
+  ))
+
+  # ── Table A: Binary satisfaction ────────────────────────────────────────────
+  print(ft_binary(s1, paste0(disp, " — satisfaction by service area (N = ", n, ")")))
+  cat("\n\n*Satisfied = ratings 3–5 on the 5-point scale. ",
+      "Not Satisfied = ratings 1–2. Sorted by percentage satisfied (highest first). ",
+      "Green ≥ 75%, amber 50–74%, red < 50%.*\n\n")
+
+  # ── Table B: Sex-stratified ──────────────────────────────────────────────────
+  if (has_strat) {
+    print(ft_strat(g$s2, g$nm, g$nf,
+                   paste0(disp, " — satisfaction stratified by sex (N = ", n, ")")))
+    cat("\n\n*Percentage of respondents rating each area as satisfied (3–5), shown ",
+        "separately for male and female respondents. Bold values in the 'Diff' column ",
+        "indicate a gap greater than 15 percentage points between sexes.*\n\n")
+  }
+
+  # ── Maoni paragraph ──────────────────────────────────────────────────────────
+  maoni_para(disp)
+
+  cat("---\n\n")
+}
+```
+
+## Qualitative Analysis of Written Responses
+
+In addition to the structured Likert-scale ratings, participants provided written comments (*maoni*) capturing their perceptions, experiences, and recommendations. Across all groups, **`r sum(maoni_theme$Total, na.rm = TRUE)`** responses were coded to one or more of eight thematic categories using a Swahili keyword-based rubric. Each response was also classified by sentiment (Positive, Negative, or Mixed) to indicate whether participants were expressing satisfaction or raising concerns within each theme. Crucially, written responses were linked to each respondent's overall satisfaction classification (as derived from the PCA-based median split), enabling differentiation between what *satisfied* and *dissatisfied* respondents emphasised in their comments.
+
+Table 3 presents an aggregated summary across all themes. Across the coded responses, **Access & Availability** and **Community & Family Support** generated the largest volumes of commentary. **Economic & Logistical Barriers** and **Waiting Time & Facility Flow** attracted proportionally higher rates of negative or mixed sentiment, and responses on these themes were disproportionately from respondents classified as Not Satisfied — reinforcing the quantitative finding that these are priority areas for service improvement. In contrast, **Service Quality & Provider Behaviour** elicited the highest rates of positive sentiment, consistent with the strong satisfaction ratings observed across groups for provider-related items.
+
+```{r table3-maoni-themes}
+tbl3 <- maoni_theme %>%
+  transmute(
+    Theme                          = Theme,
+    `Total responses`              = Total,
+    `% Positive sentiment`         = paste0(round(Pct_pos), "%"),
+    `% Negative / Mixed sentiment` = paste0(round(Pct_neg), "%"),
+    `From Satisfied respondents`   = paste0(N_satisfied,    " (", round(Pct_from_sat), "%)"),
+    `From Not Satisfied respondents` = paste0(N_notsatisfied, " (", round(100 - Pct_from_sat), "%)"),
+    pct_pos = Pct_pos, pct_neg = Pct_neg
+  )
+
+ft3 <- flextable(tbl3 %>% select(-pct_pos, -pct_neg)) %>%
+  set_caption("Table 3. Thematic analysis of written responses: sentiment and satisfaction group by theme") %>%
+  theme_vanilla() %>%
+  bold(part = "header") %>%
+  bg(bg = C_HEAD, part = "header") %>%
+  color(color = "white", part = "header") %>%
+  align(align = "left",   j = 1, part = "all") %>%
+  align(align = "center", j = 2:6, part = "all") %>%
+  width(j = 1, width = 2.5) %>%
+  width(j = 2, width = 0.9) %>%
+  width(j = 3:4, width = 1.3) %>%
+  width(j = 5:6, width = 1.5) %>%
+  fontsize(size = 9, part = "all") %>%
+  set_table_properties(layout = "fixed")
+
+# Colour the % positive column: high positive is good
+for (i in seq_len(nrow(tbl3))) {
+  p <- tbl3$pct_pos[i]
+  if (!is.na(p))
+    ft3 <- bg(ft3, i = i, j = 3,
+              bg = if (p >= 50) C_GOOD else if (p >= 25) C_WARN else C_BAD)
+  n <- tbl3$pct_neg[i]
+  if (!is.na(n))
+    ft3 <- bg(ft3, i = i, j = 4,
+              bg = if (n >= 30) C_BAD else if (n >= 15) C_WARN else C_GOOD)
+}
+ft3
+```
+
+*"% Positive sentiment" indicates the proportion of responses within each theme expressing appreciation or satisfaction. "% Negative / Mixed sentiment" reflects concerns, criticism, or ambivalence. "From Satisfied / Not Satisfied respondents" links each theme's comments back to the respondent's overall satisfaction classification (PCA-based binary label), showing whose voice predominates in each thematic area. Green = favourable direction; amber = moderate concern; red = notable concern.*
+
+---
+
+## Summary
+
+Overall, HIV services in the Dodoma Region were received positively by the surveyed community, with a mean satisfaction rate of **`r mean_sat_all`%** across all 12 respondent groups. High satisfaction was particularly consistent for provider behaviour and patient dignity, access to antiretroviral therapy, anti-stigma efforts, and integration into care and treatment — service areas where satisfaction commonly exceeded 90%. Conversely, satisfaction was lowest for economic and logistical support mechanisms, outreach services to hard-to-reach populations, waiting times, and the availability of prevention commodities (PrEP and PEP). Sex-stratified analysis among the three groups with adequate male and female representation (Adolescents & Youth, Caregivers of HIV-Positive Children, and Healthcare Providers) showed broadly comparable satisfaction patterns between sexes, though notable gaps — particularly in PrEP access and economic support for adolescents — merit programmatic attention. Written responses corroborated the quantitative findings: positive comments centred on service quality, counselling, and community support, while critical comments converged on access barriers, costs, and drug supply challenges. These findings provide a coherent basis for prioritising service improvement in the Dodoma Region HIV programme.
+
+*Five respondent groups — Community Health Workers, Community Elders, Religious Leaders, Traditional Birth Attendants, and Teachers — had sample sizes below ten. Their findings are presented for context and programme learning but should not be interpreted as statistically representative of their respective populations.*
